@@ -71,6 +71,39 @@ def test_health_reports_connection(client):
     assert data["last_error"] is None
 
 
+def test_discover_returns_devices_without_needing_a_target(client):
+    data = client.get("/discover").json()
+    assert data["fresh"] is True
+    assert data["devices"][0]["mesh_id"] == DEST
+
+
+def test_bridge_starts_without_mesh_id_and_guards_control():
+    """First run: the bridge may start before AWOX_MESH_ID is known."""
+    mesh = StubMesh(devices=[{"mesh_id": DEST, "state": True}])
+    config = Config(mac="AA:BB:CC:DD:EE:FF", mesh_name="meshname",
+                    mesh_password="meshpass")  # mesh_id deliberately unset
+    with TestClient(create_app(mesh, config)) as c:
+        assert c.get("/health").json()["mesh_id"] is None
+        assert c.get("/discover").status_code == 200       # discovery still works
+        for action in ("/on", "/off", "/toggle", "/candle", "/sequence/stop"):
+            response = c.post(action)
+            assert response.status_code == 503, action
+            assert "AWOX_MESH_ID" in response.json()["detail"], action
+        assert c.post("/brightness", json={"percent": 50}).status_code == 503
+        assert c.get("/dawn").status_code == 503
+        assert mesh.sent == [], "no command may be sent without a target"
+
+
+def test_bridge_without_mesh_id_accepts_explicit_target():
+    mesh = StubMesh(devices=[{"mesh_id": DEST, "state": False}])
+    config = Config(mac="AA:BB:CC:DD:EE:FF", mesh_name="meshname",
+                    mesh_password="meshpass")
+    with TestClient(create_app(mesh, config)) as c:
+        response = c.post(f"/off?target={DEST}")
+        assert response.status_code == 200
+        assert response.json()["target"] == DEST
+
+
 def test_state_is_fresh_when_the_lamp_answered(client):
     data = client.get("/state").json()
     assert data["fresh"] is True

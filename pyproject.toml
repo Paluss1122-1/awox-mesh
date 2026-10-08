@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "awox-mesh"
-version = "1.0.0"
+version = "1.1.0"
 description = "Control AwoX/EGLO BLE mesh lamps without the cloud, with a documented HTTP bridge"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,6 +37,7 @@ Homepage = "https://github.com/Paluss1122-1/awox-mesh"
 Issues = "https://github.com/Paluss1122-1/awox-mesh/issues"
 
 [project.scripts]
+awox = "awox_mesh.cli:main"
 awox-mesh = "awox_mesh.cli:main"
 awox-mesh-bridge = "awox_mesh.bridge.app:main"
 

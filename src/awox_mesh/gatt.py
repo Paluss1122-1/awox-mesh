@@ -259,7 +259,11 @@ class GattConnection:
             session = GattSession(self.mac, self.mesh_name, self.mesh_password,
                                   adapter=self.adapter)
             if not session.connect(timeout=self.connect_timeout):
-                last_error = "connection failed (lamp off, app connected?)"
+                last_error = (
+                    "connection failed -- the lamp may be unplugged or out of "
+                    "range, the vendor app or another instance (bridge/service) "
+                    "may hold the single connection, or the chip is stuck "
+                    "(then power-cycle at the wall switch: off 10 s, on again)")
                 session.close()
                 break
             if not session.pair():
@@ -432,14 +436,8 @@ class GattConnection:
                 for _handle, raw, _dec in collector:
                     if len(raw) < 17 or raw[0] not in (0x80, 0x82):
                         continue
-                    block = ap.att_decrypt(key, raw[1:17])
-                    mesh_id = int.from_bytes(block[0:2], "little")
-                    found[mesh_id] = {
-                        "mesh_id": mesh_id,
-                        "state": bool(block[12] & 1),
-                        "mode": block[12],
-                        "raw": block.hex(),
-                    }
+                    status = ap.decode_status(ap.att_decrypt(key, raw[1:17]))
+                    found[status["mesh_id"]] = status
                     had = True
                 return had
 

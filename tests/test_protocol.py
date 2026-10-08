@@ -146,3 +146,23 @@ def test_flag_byte_set_for_high_address():
 def test_percentage_clamping(percent):
     packet = ap.set_brightness(SESSION_KEY, DEST, percent)
     assert len(packet) >= 17
+
+
+def test_decode_status_reads_mesh_id_state_and_mac_tail():
+    block = bytes.fromhex("3412000000b02075915a380101fe9900")
+    status = ap.decode_status(block)
+    assert status["mesh_id"] == 0x1234
+    assert status["state"] is True
+    assert status["product"] == "b020"
+    assert status["mac_tail"] == "38:5A:91:75"
+    assert status["raw"] == block.hex()
+
+
+def test_decode_status_uses_only_the_low_bit_for_state():
+    # byte 12 = 0x03 means "on" while a mode (e.g. a sequence) is active.
+    block = bytes.fromhex("3412000000b02075915a380003fe9900")
+    status = ap.decode_status(block)
+    assert status["mode"] == 0x03
+    assert status["state"] is True
+    block_off = bytes.fromhex("3412000000b02075915a380002fe9900")
+    assert ap.decode_status(block_off)["state"] is False

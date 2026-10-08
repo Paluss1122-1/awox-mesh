@@ -12,7 +12,7 @@ factory in :mod:`awox_mesh.connection` so the pure ``protocol`` module can be
 used without installing any Bluetooth stack.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 from . import protocol
 

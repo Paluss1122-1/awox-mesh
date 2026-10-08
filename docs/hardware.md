@@ -12,6 +12,10 @@ open**. Consequences:
 
 - Close the vendor app before using this. An open app connection means your
   connect attempts simply never see an advertisement.
+- Stop any **other instance** too: a running bridge, a systemd service
+  (`systemctl --user stop awox-mesh`) or a second checkout. Two of your own
+  clients fight over the lamp exactly like the phone app does — they reconnect in
+  a loop and can wedge the chip.
 - Concurrent clients are pointless — a second one produces timeouts, not
   contention.
 - After an aborted GATT access the lamp can stop advertising altogether. Then

@@ -358,9 +358,4 @@ class BleakConnection:
     def parse_status(session_key: bytes, packet: bytes) -> dict | None:
         if len(packet) < 17 or packet[0] not in (0x80, 0x82):
             return None
-        block = ap.att_decrypt(session_key, packet[1:17])
-        return {
-            "mesh_id": int.from_bytes(block[0:2], "little"),
-            "state": bool(block[12] & 1),
-            "raw": block.hex(),
-        }
+        return ap.decode_status(ap.att_decrypt(session_key, packet[1:17]))

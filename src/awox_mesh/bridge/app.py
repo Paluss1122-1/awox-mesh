@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 
+from .. import __version__
 from .. import protocol as ap
 from ..config import Config
 from ..connection import create
@@ -44,13 +45,20 @@ def create_app(mesh, config) -> FastAPI:
     app = FastAPI(
         title="AwoX/EGLO Mesh Bridge",
         description="Controls AwoX/EGLO lamps over the local Bluetooth adapter.",
-        version="1.0.0",
+        version=__version__,
         lifespan=lifespan,
         dependencies=[Depends(require_key)],
     )
 
     def _dest(target: int | None) -> int:
-        return mesh_id_default if target is None else target
+        if target is None:
+            if mesh_id_default is None:
+                raise HTTPException(status_code=503, detail=(
+                    "AWOX_MESH_ID is not set, so there is no default target. "
+                    "Call GET /discover to read your lamp's mesh id, set it in "
+                    "config.env, or pass ?target=0x.... explicitly."))
+            return mesh_id_default
+        return target
 
     async def _run(build, target: int | None):
         try:
@@ -86,14 +94,13 @@ def create_app(mesh, config) -> FastAPI:
             "connected": mesh.is_connected,
             "mac": mesh.mac,
             "mesh_name": config.mesh_name,
-            "mesh_id": f"0x{mesh_id_default:04X}",
+            "mesh_id": (None if mesh_id_default is None
+                        else f"0x{mesh_id_default:04X}"),
             "known_devices": sorted(mesh.states),
             "last_error": mesh.last_error,
         }
 
-    @app.get("/state", summary="Lamp state (freshly queried)")
-    async def state():
-        _require_link()
+    async def _all_devices() -> list[dict]:
         try:
             devices = await mesh.query_state()
         except ConnectionError as err:
@@ -101,8 +108,19 @@ def create_app(mesh, config) -> FastAPI:
         except Exception as err:
             raise HTTPException(status_code=503,
                                 detail=f"{type(err).__name__}: {err}") from err
-        return {"devices": devices or [mesh.states[k] for k in sorted(mesh.states)],
-                "fresh": bool(devices)}
+        return devices or [mesh.states[k] for k in sorted(mesh.states)]
+
+    @app.get("/discover", summary="Read the real mesh id(s) from the mesh")
+    async def discover():
+        _require_link()
+        devices = await _all_devices()
+        return {"devices": devices, "fresh": bool(devices)}
+
+    @app.get("/state", summary="Lamp state (freshly queried)")
+    async def state():
+        _require_link()
+        devices = await _all_devices()
+        return {"devices": devices, "fresh": bool(devices)}
 
     @app.get("/state/last", summary="Last observed state (passive, no BLE query)")
     async def state_last():

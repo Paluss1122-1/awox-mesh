@@ -281,3 +281,23 @@ def decode_schedule(block: bytes) -> dict:
         "mired": mired,
         "raw": block.hex(),
     }
+
+
+def decode_status(block: bytes) -> dict:
+    """Decode a decrypted status block.
+
+    Layout: ``[0:2]`` mesh id (LE), ``[5:7]`` product code, ``[7:11]`` the last
+    four bytes of the device MAC in reverse, ``[12]`` state and mode.
+
+    Byte 12 is not a plain 0/1: bit 0 is on/off, the remaining bits encode the
+    mode (sequence running, candle, ...). Use ``& 1`` -- comparing the whole byte
+    against 1 reports a lamp as off while a colour sequence plays.
+    """
+    return {
+        "mesh_id": int.from_bytes(block[0:2], "little"),
+        "product": block[5:7].hex(),
+        "mac_tail": ":".join(f"{byte:02X}" for byte in reversed(block[7:11])),
+        "mode": block[12],
+        "state": bool(block[12] & 1),
+        "raw": block.hex(),
+    }

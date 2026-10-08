@@ -1,7 +1,8 @@
 """Command line client for awox-mesh.
 
-By default it talks to the HTTP bridge (the same API the REST docs describe).
-With ``--direct`` it opens a BLE connection itself and bypasses the bridge.
+Most commands talk to the HTTP bridge. ``discover`` reads the lamp's real mesh
+address straight off the hardware and needs no bridge; ``--direct`` opens a BLE
+connection for the other commands too.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -19,6 +21,21 @@ DEFAULT_URL = "http://127.0.0.1:8087"
 def _fail(msg: str) -> int:
     print(f"error: {msg}", file=sys.stderr)
     return 1
+
+
+def _print_devices(devices: list[dict]) -> None:
+    for d in sorted(devices, key=lambda x: x["mesh_id"]):
+        tail = d.get("mac_tail")
+        product = d.get("product")
+        extra = "  ".join(part for part in (
+            f"mac …{tail}" if tail else "",
+            f"product {product}" if product else "",
+        ) if part)
+        print(f"lamp 0x{d['mesh_id']:04X}  {'ON ' if d['state'] else 'OFF'}  {extra}".rstrip())
+    ids = ", ".join(f"0x{d['mesh_id']:04X}" for d in devices)
+    print(f"\nFound {len(devices)} lamp(s). Set AWOX_MESH_ID to the one you want: {ids}")
+    if len(devices) > 1:
+        print("Several lamps share this mesh; tell them apart by the MAC tail above.")
 
 
 class _Client:
@@ -46,6 +63,12 @@ class _Client:
 def _run_http(client: _Client, args) -> int:
     if args.command == "health":
         print(json.dumps(client.get("/health"), indent=2))
+        return 0
+    if args.command == "discover":
+        devices = client.get("/discover").get("devices") or []
+        if not devices:
+            return _fail("no lamp answered the broadcast status query")
+        _print_devices(devices)
         return 0
     if args.command == "state":
         data = client.get("/state")
@@ -94,9 +117,28 @@ def _run_http(client: _Client, args) -> int:
     return 0
 
 
+async def _direct_discover() -> int:
+    from .config import Config
+    from .connection import discover
+
+    config = Config.from_env()
+    print(f"connecting to {config.mac} … the lamp advertises rarely, this can take a minute",
+          file=sys.stderr)
+    try:
+        devices = await discover(config)
+    except Exception as err:
+        return _fail(f"{type(err).__name__}: {err}")
+    if not devices:
+        return _fail("no lamp answered the broadcast status query -- close the vendor "
+                     "app and any other instance (bridge/service) holding the lamp; "
+                     "if the chip is stuck, power-cycle at the wall switch")
+    _print_devices(devices)
+    return 0
+
+
 async def _run_direct(args) -> int:
     from . import protocol as ap
-    from .config import Config
+    from .config import MESH_ID_HELP, Config
     from .connection import create
 
     if args.command not in ("on", "off", "toggle", "state", "brightness", "lightshow"):
@@ -104,14 +146,17 @@ async def _run_direct(args) -> int:
                      "or use curl against the REST API")
 
     config = Config.from_env()
+    needs_id = args.command in ("on", "off", "toggle", "brightness", "lightshow")
+    if needs_id and config.mesh_id is None:
+        return _fail(MESH_ID_HELP)
+
     mesh = create(config)
     try:
         if args.command == "state":
             devices = await mesh.query_state()
             if not devices:
                 return _fail("no status from the lamp")
-            for d in devices:
-                print(f"lamp 0x{d['mesh_id']:04X}: {'ON' if d['state'] else 'OFF'}")
+            _print_devices(devices)
             return 0
         if args.command == "brightness":
             await mesh.send(lambda k, m: ap.set_brightness(k, m, args.percent))
@@ -142,34 +187,57 @@ async def _run_direct(args) -> int:
         await mesh.stop()
 
 
+def _program_name() -> str:
+    name = os.path.basename(sys.argv[0] or "")
+    if not name or name == "cli.py" or name.endswith(".py"):
+        return "awox-mesh"
+    return name
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="awox", description="Control AwoX/EGLO mesh lamps.")
+    # The common options are defined on the top-level parser (so they work
+    # before the subcommand) and, with SUPPRESS defaults, on every subparser too
+    # (so they also work after it) without the subparser clobbering the value.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--url", default=argparse.SUPPRESS,
+                        help="bridge base URL")
+    common.add_argument("--api-key", default=argparse.SUPPRESS,
+                        help="X-API-Key for the bridge")
+    common.add_argument("--direct", action="store_true", default=argparse.SUPPRESS,
+                        help="talk to the lamp directly over BLE instead of the bridge")
+
+    p = argparse.ArgumentParser(prog=_program_name(),
+                                description="Control AwoX/EGLO mesh lamps.")
     p.add_argument("--url", default=DEFAULT_URL, help="bridge base URL")
     p.add_argument("--api-key", help="X-API-Key for the bridge")
     p.add_argument("--direct", action="store_true",
                    help="talk to the lamp directly over BLE instead of the bridge")
     sub = p.add_subparsers(dest="command", required=True)
 
+    sub.add_parser("discover", parents=[common],
+                   help="read the lamp's real mesh id (first run, no bridge needed)")
+
     for name, help_text in (("on", "turn on"), ("off", "turn off"),
                             ("toggle", "toggle"), ("state", "show state")):
-        sub.add_parser(name, help=help_text)
+        sub.add_parser(name, parents=[common], help=help_text)
 
-    b = sub.add_parser("brightness", help="set brightness")
+    b = sub.add_parser("brightness", parents=[common], help="set brightness")
     b.add_argument("percent", type=int, choices=range(0, 101))
 
-    c = sub.add_parser("color", help="set RGB colour")
+    c = sub.add_parser("color", parents=[common], help="set RGB colour")
     c.add_argument("--red", type=int, required=True)
     c.add_argument("--green", type=int, required=True)
     c.add_argument("--blue", type=int, required=True)
     c.add_argument("--brightness", type=int, choices=range(0, 101))
 
-    w = sub.add_parser("white", help="set white temperature and/or brightness")
+    w = sub.add_parser("white", parents=[common],
+                       help="set white temperature and/or brightness")
     w.add_argument("--temperature", type=int, choices=range(0, 101))
     w.add_argument("--brightness", type=int, choices=range(0, 101))
 
-    sub.add_parser("health", help="bridge/connection status")
+    sub.add_parser("health", parents=[common], help="bridge/connection status")
 
-    ls = sub.add_parser("lightshow", help="control the light show")
+    ls = sub.add_parser("lightshow", parents=[common], help="control the light show")
     ls.add_argument("action", nargs="?", default="start",
                     choices=("start", "stop", "status"))
 
@@ -181,6 +249,26 @@ def main() -> int:
     if args.command == "white" and args.temperature is None \
             and args.brightness is None:
         return _fail("white needs --temperature and/or --brightness")
+
+    # discover works with or without the bridge: use it when present, otherwise
+    # read the id straight off the lamp so first-run setup needs no server.
+    if args.command == "discover":
+        if args.direct:
+            return asyncio.run(_direct_discover())
+        try:
+            return _run_http(_Client(args.url, args.api_key), args)
+        except urllib.error.HTTPError as err:
+            detail = err.reason
+            try:
+                detail = json.loads(err.read().decode("utf-8", "replace")).get("detail", detail)
+            except Exception:
+                pass
+            return _fail(f"bridge error ({err.code}): {detail}")
+        except urllib.error.URLError:
+            print("bridge not reachable -- reading the mesh id directly over BLE",
+                  file=sys.stderr)
+            return asyncio.run(_direct_discover())
+
     if args.direct:
         return asyncio.run(_run_direct(args))
     try:

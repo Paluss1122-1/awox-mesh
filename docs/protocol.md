@@ -162,6 +162,13 @@ Decrypted status notifications look like this:
 [0:2] mesh id (LE)   [5:7] product code   [7:11] MAC reversed   [12] state/mode
 ```
 
+`[7:11]` holds the last four bytes of the device MAC in reverse, which is enough
+to tell several lamps of the same mesh apart; `awox discover` prints it as
+`mac_tail`. The mesh id in `[0:2]` is the value you must put in `AWOX_MESH_ID`,
+and it is exactly why discovery has to come from the hardware: there is no
+formula from MAC or name to it. `awox_mesh.protocol.decode_status` decodes the
+whole block.
+
 Byte 12 is **not** a plain 0/1. Bit 0 is on/off, the remaining bits encode the
 mode (sequence running, candle, …). Comparing the whole byte against `1` reports
 a lamp as *off* while a colour sequence is playing. Use `byte & 1`.
