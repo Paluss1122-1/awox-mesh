@@ -16,6 +16,7 @@ from .. import protocol as ap
 from ..config import Config, ConfigError, load_default_env_files, load_env_file
 from ..connection import create
 from ..lightshow import MIN_PAUSE, run_lightshow
+from ..protocol import Status
 from .models import BrightnessBody, ColorBody, DawnBody, SequenceBody, WhiteBody
 
 logger = logging.getLogger("awox.bridge")
@@ -101,7 +102,7 @@ def create_app(mesh, config) -> FastAPI:
                 detail += f" [{mesh.last_error}]"
             raise HTTPException(status_code=503, detail=detail)
 
-    async def _fresh_state(dest: int) -> dict:
+    async def _fresh_state(dest: int) -> Status:
         _require_link()
         try:
             devices = await mesh.query_state()
@@ -127,7 +128,7 @@ def create_app(mesh, config) -> FastAPI:
             "last_error": mesh.last_error,
         }
 
-    async def _all_devices() -> tuple[list[dict], bool]:
+    async def _all_devices() -> tuple[list[Status], bool]:
         try:
             devices = await mesh.query_state()
         except ConnectionError as err:
@@ -197,9 +198,9 @@ def create_app(mesh, config) -> FastAPI:
         await _run(lambda key, dest: ap.set_color_rgb(key, dest, body.red, body.green,
                                                       body.blue), target)
         if body.brightness is not None:
+            percent = body.brightness
             await asyncio.sleep(0.35)
-            await _run(lambda key, dest: ap.set_brightness(key, dest, body.brightness),
-                       target)
+            await _run(lambda key, dest: ap.set_brightness(key, dest, percent), target)
         return {"ok": True, "target": _dest(target),
                 **body.model_dump(exclude_none=True)}
 
@@ -209,13 +210,13 @@ def create_app(mesh, config) -> FastAPI:
             raise HTTPException(status_code=422,
                                 detail="temperature or brightness required")
         if body.temperature is not None:
-            await _run(lambda key, dest: ap.set_white_temperature(key, dest,
-                                                                  body.temperature),
+            temperature = body.temperature
+            await _run(lambda key, dest: ap.set_white_temperature(key, dest, temperature),
                        target)
         if body.brightness is not None:
+            percent = body.brightness
             await asyncio.sleep(0.35)
-            await _run(lambda key, dest: ap.set_brightness(key, dest, body.brightness),
-                       target)
+            await _run(lambda key, dest: ap.set_brightness(key, dest, percent), target)
         return {"ok": True, "target": _dest(target),
                 **body.model_dump(exclude_none=True)}
 

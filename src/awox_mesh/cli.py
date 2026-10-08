@@ -9,6 +9,10 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .protocol import Status
 
 DEFAULT_URL = "http://127.0.0.1:8087"
 
@@ -18,7 +22,7 @@ def _fail(msg: str) -> int:
     return 1
 
 
-def _print_devices(devices: list[dict]) -> None:
+def _print_devices(devices: list[Status]) -> None:
     for d in sorted(devices, key=lambda x: x["mesh_id"]):
         tail = d.get("mac_tail")
         product = d.get("product")
@@ -38,7 +42,7 @@ class _Client:
         self.base = base.rstrip("/")
         self.api_key = api_key
 
-    def _request(self, method: str, path: str, body: dict | None = None):
+    def _request(self, method: str, path: str, body: dict[str, object] | None = None):
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(f"{self.base}{path}", data=data, method=method)
         if data is not None:
@@ -51,7 +55,7 @@ class _Client:
     def get(self, path: str):
         return self._request("GET", path)
 
-    def post(self, path: str, body: dict | None = None):
+    def post(self, path: str, body: dict[str, object] | None = None):
         return self._request("POST", path, body)
 
 

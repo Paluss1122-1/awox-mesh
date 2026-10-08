@@ -13,10 +13,12 @@ import re
 import subprocess
 import time
 from os import urandom
+from typing import Any
 
 import pexpect
 
 from . import protocol as ap
+from .protocol import Status
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +73,8 @@ class GattSession:
         self.status_handle = status_handle
         self.command_handle = command_handle
         self.adapter = adapter or _detect_adapter()
-        self.session_key: bytearray | None = None
-        self.child = None
+        self.session_key: bytes | None = None
+        self.child: Any = None
         self.last_notify = 0.0
         self.pair_diagnosis = ""
 
@@ -176,7 +178,7 @@ class GattSession:
         if stable[0] == 0x0D:
             self.session_key = ap.make_session_key(
                 self.mesh_name, self.mesh_password, session_random, stable[1:9])
-            logger.info("session key: %s", bytes(self.session_key).hex())
+            logger.info("session key: %s", self.session_key.hex())
             return True
 
         self.pair_diagnosis = ("lamp rejected the pairing (0x0e, alternating mode) "
@@ -226,7 +228,7 @@ class GattConnection:
         self._lock = asyncio.Lock()
         self._stop = False
 
-        self.states: dict[int, dict] = {}
+        self.states: dict[int, Status] = {}
         self.last_error: str | None = None
         self.last_seen: float = 0.0
 
@@ -239,7 +241,9 @@ class GattConnection:
 
     @property
     def session_key(self) -> bytes | None:
-        return bytes(self._session.session_key) if self.is_connected else None
+        if self._session is None:
+            return None
+        return self._session.session_key
 
     def _connect_blocking(self) -> bool:
         if self._session is not None:
@@ -273,11 +277,13 @@ class GattConnection:
             self._session = session
             self.last_error = None
 
-            try:
-                session.write_handle(session.command_handle,
-                                     ap.set_time(bytes(session.session_key)))
-            except Exception as err:
-                logger.debug("setting the clock failed: %s", err)
+            key = session.session_key
+            if key is not None:
+                try:
+                    session.write_handle(session.command_handle,
+                                         ap.set_time(key))
+                except Exception as err:
+                    logger.debug("setting the clock failed: %s", err)
             return True
 
         self.last_error = last_error
@@ -368,6 +374,13 @@ class GattConnection:
             await asyncio.to_thread(self._session.close)
             self._session = None
 
+    def _live(self) -> tuple[GattSession, bytes]:
+        session = self._session
+        key = self.session_key
+        if session is None or key is None:
+            raise ConnectionError(self.last_error or "no mesh connection")
+        return session, key
+
     async def send(self, build) -> None:
         async with self._lock:
             if (self._session is not None and self.last_seen
@@ -379,23 +392,24 @@ class GattConnection:
                 await asyncio.to_thread(self._close_session)
             if not await self.ensure_connected():
                 raise ConnectionError(self.last_error or "no mesh connection")
-            packet = build(self.session_key, self.mesh_id)
+            session, key = self._live()
+            packet = build(key, self.mesh_id)
             await asyncio.to_thread(
-                self._session.write_handle, self._session.command_handle, packet)
+                session.write_handle, session.command_handle, packet)
 
     async def query(self, build, flags=(0x35,), wait: float = 5.0) -> list[bytes]:
         async with self._lock:
             if not await self.ensure_connected():
                 raise ConnectionError(self.last_error or "no mesh connection")
-            key = self.session_key
+            session, key = self._live()
 
             def _run():
-                self._session.write_handle(self._session.command_handle,
-                                           build(key, self.mesh_id))
+                session.write_handle(session.command_handle,
+                                     build(key, self.mesh_id))
                 blocks: list[bytes] = []
                 deadline = time.time() + wait
                 first = min(1.0, wait)
-                for _handle, raw in self._session.collect_notifications(first):
+                for _handle, raw in session.collect_notifications(first):
                     if len(raw) >= 17 and raw[0] in flags:
                         blocks.append(ap.att_decrypt(key, raw[1:17]))
                 if blocks:
@@ -405,7 +419,7 @@ class GattConnection:
                     if chunk <= 0:
                         break
                     found = False
-                    for _handle, raw in self._session.collect_notifications(chunk):
+                    for _handle, raw in session.collect_notifications(chunk):
                         if len(raw) >= 17 and raw[0] in flags:
                             blocks.append(ap.att_decrypt(key, raw[1:17]))
                             found = True
@@ -419,13 +433,13 @@ class GattConnection:
                 self.last_error = f"{type(err).__name__}: {err}"
                 return []
 
-    async def query_state(self, wait: float = STATUS_WAIT) -> list[dict]:
+    async def query_state(self, wait: float = STATUS_WAIT) -> list[Status]:
         async with self._lock:
             if not await self.ensure_connected():
                 raise ConnectionError(self.last_error or "no mesh connection")
-            key = self.session_key
+            session, key = self._live()
 
-            def _collect(collector, found: dict[int, dict]) -> bool:
+            def _collect(collector, found: dict[int, Status]) -> bool:
                 had = False
                 for _handle, raw in collector:
                     if len(raw) < 17 or raw[0] not in (0x80, 0x82):
@@ -436,18 +450,18 @@ class GattConnection:
                 return had
 
             def _query():
-                self._session.write_handle(self._session.command_handle,
-                                           ap.build_status_query(key))
-                found: dict[int, dict] = {}
+                session.write_handle(session.command_handle,
+                                     ap.build_status_query(key))
+                found: dict[int, Status] = {}
                 deadline = time.time() + wait
                 first = min(1.0, wait)
-                if _collect(self._session.collect_notifications(first), found):
+                if _collect(session.collect_notifications(first), found):
                     return list(found.values())
                 while time.time() < deadline:
                     chunk = min(0.5, deadline - time.time())
                     if chunk <= 0:
                         break
-                    if _collect(self._session.collect_notifications(chunk), found):
+                    if _collect(session.collect_notifications(chunk), found):
                         return list(found.values())
                 return list(found.values())
 

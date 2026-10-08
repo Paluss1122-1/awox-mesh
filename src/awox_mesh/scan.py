@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 AWOX_OUI = "A4:C1:38"
+
+
+class Lamp(TypedDict):
+    address: str
+    name: str
+    rssi: int
 
 
 def is_awox_address(address: str) -> bool:
     return address.upper().replace("-", ":").startswith(AWOX_OUI)
 
 
-async def scan(timeout: float = 30.0) -> list[dict]:
+async def scan(timeout: float = 30.0) -> list[Lamp]:
     """Return the AwoX lamps seen within ``timeout`` seconds.
 
     Uses bleak's discovery. The lamps advertise rarely (about every 25 s), so a
@@ -18,7 +26,7 @@ async def scan(timeout: float = 30.0) -> list[dict]:
     from bleak import BleakScanner
 
     found = await BleakScanner.discover(timeout=timeout, return_adv=True)
-    lamps = []
+    lamps: list[Lamp] = []
     for address, (device, adv) in found.items():
         if not is_awox_address(address):
             continue

@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 
 from .config import Config, ConfigError
+from .protocol import Status
 
 _UNSET_MESH_ID = 0
 
@@ -43,7 +44,7 @@ def create(config: Config):
     raise ConfigError(f"unknown AWOX_BACKEND: {config.backend!r}")
 
 
-async def discover(config: Config) -> list[dict]:
+async def discover(config: Config) -> list[Status]:
     """Read every lamp's mesh id from a broadcast status query (no AWOX_MESH_ID needed)."""
     backend = resolve_backend(config)
     if backend == "bleak":

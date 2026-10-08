@@ -10,21 +10,23 @@ import asyncio
 import logging
 import time
 from os import urandom
+from typing import Any
 
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 
 from . import protocol as ap
+from .protocol import Status
 
 try:
     from dbus_fast import BusType
     from dbus_fast.aio import MessageBus
 
-    HAVE_DBUS = True
 except ImportError:  # pragma: no cover
-    BusType = MessageBus = None
-    HAVE_DBUS = False
+    BusType = MessageBus = None  # type: ignore[assignment]
+
+HAVE_DBUS = BusType is not None and MessageBus is not None
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +62,12 @@ class BleakConnection:
         self.write_with_response = True
 
         self._client: BleakClient | None = None
-        self._session_key: bytearray | None = None
+        self._session_key: bytes | None = None
         self._write_lock = asyncio.Lock()
         self._connected_evt = asyncio.Event()
         self._stop = False
 
-        self.states: dict[int, dict] = {}
+        self.states: dict[int, Status] = {}
         self.last_error: str | None = None
         self.last_seen: float = 0.0
 
@@ -94,7 +96,7 @@ class BleakConnection:
         async with BleakScanner(detected):
             return await asyncio.wait_for(found, timeout)
 
-    async def _find_path(self, bus: MessageBus) -> str | None:
+    async def _find_path(self, bus: Any) -> str | None:
         introspection = await bus.introspect("org.bluez", "/")
         proxy = bus.get_proxy_object("org.bluez", "/", introspection)
         manager = proxy.get_interface("org.freedesktop.DBus.ObjectManager")
@@ -106,7 +108,7 @@ class BleakConnection:
 
     async def _bluez_device_path(self) -> str | None:
         """BlueZ D-Bus object path of the lamp, if bluetoothd knows it."""
-        if not HAVE_DBUS:
+        if MessageBus is None or BusType is None:
             return None
         bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
         try:
@@ -118,7 +120,7 @@ class BleakConnection:
             bus.disconnect()
 
     async def _bluez_reset_device(self, remove: bool) -> None:
-        if not HAVE_DBUS:
+        if MessageBus is None or BusType is None:
             return
         bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
         try:
@@ -127,8 +129,8 @@ class BleakConnection:
                 return
 
             introspection = await bus.introspect("org.bluez", path)
-            device = bus.get_proxy_object("org.bluez", path, introspection) \
-                        .get_interface("org.bluez.Device1")
+            device: Any = bus.get_proxy_object("org.bluez", path, introspection) \
+                .get_interface("org.bluez.Device1")
             try:
                 await device.call_disconnect()
             except Exception:
@@ -137,8 +139,8 @@ class BleakConnection:
             if remove:
                 adapter_path = path.rsplit("/", 1)[0]
                 introspection = await bus.introspect("org.bluez", adapter_path)
-                adapter = bus.get_proxy_object("org.bluez", adapter_path, introspection) \
-                             .get_interface("org.bluez.Adapter1")
+                adapter: Any = bus.get_proxy_object("org.bluez", adapter_path, introspection) \
+                    .get_interface("org.bluez.Adapter1")
                 await adapter.call_remove_device(path)
                 logger.info("Removed BlueZ device record %s -- it will be rediscovered", path)
         except Exception as err:
@@ -310,25 +312,34 @@ class BleakConnection:
             except Exception as err:
                 logger.warning("Disconnect failed: %s", err)
 
+    def _live(self) -> tuple[BleakClient, bytes]:
+        client = self._client
+        key = self._session_key
+        if client is None or key is None:
+            raise ConnectionError(self.last_error or "not connected to the mesh")
+        return client, key
+
     async def _send_raw(self, packet: bytes, response: bool | None = None) -> None:
-        if not self.is_connected:
+        client, _key = self._live()
+        if not client.is_connected:
             raise ConnectionError(self.last_error or "not connected to the mesh")
         if response is None:
             response = self.write_with_response
         async with self._write_lock:
-            await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=response)
+            await client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=response)
 
     async def send(self, build) -> None:
         if not self.is_connected:
             raise ConnectionError(self.last_error or "not connected to the mesh")
-        await self._send_raw(build(self._session_key, self.mesh_id))
+        _client, key = self._live()
+        await self._send_raw(build(key, self.mesh_id))
 
     async def query(self, build, flags=(0x35,), wait: float = 5.0) -> list[bytes]:
         """Notifications are not reliably reachable over bleak; returns ``[]``."""
         logger.debug("query() is not supported by the bleak backend")
         return []
 
-    async def query_state(self, wait: float = 35.0) -> list[dict]:
+    async def query_state(self, wait: float = 35.0) -> list[Status]:
         """Best effort: request status and return whatever arrived via notifications."""
         if not self.is_connected:
             raise ConnectionError(self.last_error or "not connected to the mesh")
@@ -342,17 +353,19 @@ class BleakConnection:
         return devices
 
     async def request_status(self, dest: int = BROADCAST) -> None:
-        await self._send_raw(ap.build_status_query(self._session_key, dest))
+        _client, key = self._live()
+        await self._send_raw(ap.build_status_query(key, dest))
 
     def _on_notification(self, _sender, data: bytearray) -> None:
-        if self._session_key is None:
+        key = self._session_key
+        if key is None:
             return
-        status = self.parse_status(self._session_key, bytes(data))
+        status = self.parse_status(key, bytes(data))
         if status:
             self.states[status["mesh_id"]] = status
 
     @staticmethod
-    def parse_status(session_key: bytes, packet: bytes) -> dict | None:
+    def parse_status(session_key: bytes, packet: bytes) -> Status | None:
         if len(packet) < 17 or packet[0] not in (0x80, 0x82):
             return None
         return ap.decode_status(ap.att_decrypt(session_key, packet[1:17]))

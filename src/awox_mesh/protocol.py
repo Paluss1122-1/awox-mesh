@@ -6,8 +6,21 @@ Pure packet arithmetic and crypto, no Bluetooth. See docs/protocol.md.
 from __future__ import annotations
 
 import colorsys
+from typing import TypedDict
 
 from Crypto.Cipher import AES
+
+
+class Status(TypedDict):
+    """A decoded status block."""
+
+    mesh_id: int
+    product: str
+    mac_tail: str
+    mode: int
+    state: bool
+    raw: str
+
 
 OP_POWER = (0x00, 0x06)
 OP_BRIGHTNESS = (0x00, 0x08)
@@ -258,7 +271,7 @@ def set_candle_mode(session_key: bytes, dest: int, level: int = 1) -> bytes:
                          bytes([0x10, level & 0xFF, 1]))
 
 
-def decode_schedule(block: bytes) -> dict:
+def decode_schedule(block: bytes) -> dict[str, object]:
     mired = block[9] | (block[10] << 8)
     return {
         "mesh_id": int.from_bytes(block[0:2], "little"),
@@ -277,7 +290,7 @@ def decode_schedule(block: bytes) -> dict:
     }
 
 
-def decode_status(block: bytes) -> dict:
+def decode_status(block: bytes) -> Status:
     """Decode a decrypted status block.
 
     Layout: ``[0:2]`` mesh id (LE), ``[5:7]`` product code, ``[7:11]`` the last
