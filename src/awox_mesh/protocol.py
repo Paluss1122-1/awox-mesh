@@ -1,12 +1,6 @@
-"""Wire protocol for AwoX/EGLO BLE mesh lamps.
+"""AwoX/EGLO BLE mesh command framing (the non-Telink variant).
 
-This module is pure packet arithmetic and cryptography -- it needs no Bluetooth
-stack and no network access, which makes it easy to unit-test.
-
-The pairing handshake matches the classic Telink scheme implemented by other
-open AwoX libraries. The command framing does **not**: this firmware wraps a
-single AES-ECB block instead of the Telink CCM construction. See
-``docs/protocol.md`` for the full derivation.
+Pure packet arithmetic and crypto, no Bluetooth. See docs/protocol.md.
 """
 
 from __future__ import annotations

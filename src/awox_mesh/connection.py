@@ -1,15 +1,4 @@
-"""Unified connection factory.
-
-Both backends expose the same small surface used by the bridge and the CLI:
-``run``/``stop``, ``send(build)``, ``query(build)`` and ``query_state()``, plus
-``is_connected``, ``states`` and ``last_error``.
-
-``AWOX_BACKEND`` selects the backend:
-
-* ``gatt``  -- gatttool (full features, including ``/state`` via notifications)
-* ``bleak`` -- portable BLE control (no reliable notifications)
-* ``auto``  -- gatt when ``gatttool`` is on ``PATH``, otherwise bleak (default)
-"""
+"""Pick the BLE backend: gatt (gatttool), bleak, or auto."""
 
 from __future__ import annotations
 
@@ -33,9 +22,6 @@ def resolve_backend(config: Config) -> str:
 
 def create(config: Config):
     backend = resolve_backend(config)
-    # A missing mesh id is allowed so discovery and /state can run before it is
-    # known. Control commands must be guarded by the caller in that case; the
-    # placeholder never reaches the wire because query frames use broadcast.
     mesh_id = _UNSET_MESH_ID if config.mesh_id is None else config.mesh_id
 
     if backend == "gatt":
@@ -58,12 +44,7 @@ def create(config: Config):
 
 
 async def discover(config: Config) -> list[dict]:
-    """Connect and return every lamp that answers a broadcast status query.
-
-    This is the first-run path: it needs **no** ``AWOX_MESH_ID``. Each status
-    block carries the answering lamp's real mesh address in its first two bytes,
-    so the id can be read off the hardware instead of guessed.
-    """
+    """Read every lamp's mesh id from a broadcast status query (no AWOX_MESH_ID needed)."""
     backend = resolve_backend(config)
     if backend == "bleak":
         raise ConfigError(

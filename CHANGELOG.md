@@ -4,10 +4,42 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-10-08
+
+Correctness pass after re-reading the code against its own documentation.
+
+### Fixed
+
+- `/state` and `/discover` no longer report cached values as `"fresh": true`.
+  When the lamp does not answer, the response now carries the cache with
+  `"fresh": false`, which is what the README always claimed.
+- `?target=0x1234` works. The query parameter was parsed as a plain integer, so
+  the documented hex form returned `422`; it now accepts both forms.
+- `awox --direct lightshow stop|status` no longer starts the whole show. Those
+  actions need the bridge, and direct mode says so instead of running it.
+- `awox color` reports success only after the request actually succeeded.
+- The bleak backend now sets the lamp's clock on connect, so schedules and the
+  dawn alarm are not off by the connect offset there either.
+- A non-numeric `AWOX_PORT`, `AWOX_ADV_TIMEOUT` or `AWOX_CONNECT_TIMEOUT` gives a
+  clean config error instead of a traceback.
+- The bridge waits for the cancelled connection task on shutdown.
+
+### Documentation
+
+- Full configuration reference (all variables and bridge flags).
+- A Home Assistant `rest_command` example, a troubleshooting table, and a
+  security note.
+- Corrected the schedule `body[3]` layout, the pairing pseudocode, and the
+  systemd path instructions.
+
+### Removed
+
+- Dead code (`BleakConnection._target`, an unused logger and tuple element) and
+  comments that only restated the code.
+
 ## [1.2.0] - 2026-10-08
 
-Second round of fixes from watching a clean install be guided entirely through a
-chat assistant.
+Follow-up after a clean install on a second user account.
 
 ### Added
 
@@ -41,7 +73,7 @@ chat assistant.
 
 ## [1.1.0] - 2026-10-08
 
-Fixes from a real first-run install on a clean user account.
+First-run fixes after installing on a clean user account.
 
 ### Added
 
@@ -103,13 +135,14 @@ First public release.
 - `awox`: command line client, HTTP-first with a `--direct` BLE mode.
 - Protocol and hardware documentation, including the full derivation and the
   dead ends.
-- 39 unit tests: the protocol layer checked against independent AES-ECB and
-  bitwise-CRC references with field-by-field layout assertions, plus bridge tests
-  on a stub connection that pin the honesty rule.
+- A hardware-free test suite: the protocol layer checked against independent
+  AES-ECB and bitwise-CRC references with field-by-field layout assertions, plus
+  bridge tests on a stub connection.
 
 ### Notes
 
 - `AWOX_MESH_ID` is required and has no default: control commands go to the
   lamp's real mesh address, never to `0` and never to broadcast.
-- State is only ever reported when freshly read. `/on`, `/off` and `/toggle`
-  answer `503` and send nothing rather than claim an unverified state.
+- A state is only marked fresh when it was actually read back; cached values
+  carry `"fresh": false`. `/on`, `/off` and `/toggle` answer `503` and send
+  nothing rather than claim an unverified state.

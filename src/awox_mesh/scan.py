@@ -1,16 +1,6 @@
-"""Find AwoX/EGLO BLE lamps around you.
-
-Every AwoX lamp uses the Telink OUI ``A4:C1:38``. Scanning for that prefix is
-how you get the MAC for ``config.env`` without guessing -- and, because several
-lamps of one mesh share the same BLE name, the MAC is the only thing that tells
-them apart.
-"""
+"""Find AwoX/EGLO lamps advertising nearby (Telink OUI A4:C1:38)."""
 
 from __future__ import annotations
-
-import logging
-
-logger = logging.getLogger(__name__)
 
 AWOX_OUI = "A4:C1:38"
 

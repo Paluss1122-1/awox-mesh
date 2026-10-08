@@ -1,13 +1,7 @@
-"""gatttool backend for AwoX/EGLO mesh lamps.
+"""gatttool backend.
 
-``gatttool`` is deprecated but remains the only way to receive the lamp's
-notifications here: the status characteristic has no CCCD, so BlueZ's
-``StartNotify()`` fails and the chip drops the link. Notifications arrive on
-their own once a valid command is sent, and gatttool exposes them as plain
-text -- which is what this backend parses.
-
-The blocking gatttool session lives in :class:`GattSession`; :class:`GattConnection`
-wraps it in an asyncio-friendly, reconnecting public interface.
+The only backend that can read status here: the status characteristic has no
+CCCD, so BlueZ notifications fail. See docs/hardware.md.
 """
 
 from __future__ import annotations
@@ -201,7 +195,7 @@ class GattSession:
             handle, hexvals = self.child.match.groups()
             raw = bytes.fromhex(hexvals.strip().replace(" ", ""))
             self.last_notify = time.time()
-            results.append((handle, raw, None))
+            results.append((handle, raw))
             logger.info("NOTIFY %s: %s", handle, raw.hex())
         return results
 
@@ -401,7 +395,7 @@ class GattConnection:
                 blocks: list[bytes] = []
                 deadline = time.time() + wait
                 first = min(1.0, wait)
-                for _handle, raw, _dec in self._session.collect_notifications(first):
+                for _handle, raw in self._session.collect_notifications(first):
                     if len(raw) >= 17 and raw[0] in flags:
                         blocks.append(ap.att_decrypt(key, raw[1:17]))
                 if blocks:
@@ -411,7 +405,7 @@ class GattConnection:
                     if chunk <= 0:
                         break
                     found = False
-                    for _handle, raw, _dec in self._session.collect_notifications(chunk):
+                    for _handle, raw in self._session.collect_notifications(chunk):
                         if len(raw) >= 17 and raw[0] in flags:
                             blocks.append(ap.att_decrypt(key, raw[1:17]))
                             found = True
@@ -433,7 +427,7 @@ class GattConnection:
 
             def _collect(collector, found: dict[int, dict]) -> bool:
                 had = False
-                for _handle, raw, _dec in collector:
+                for _handle, raw in collector:
                     if len(raw) < 17 or raw[0] not in (0x80, 0x82):
                         continue
                     status = ap.decode_status(ap.att_decrypt(key, raw[1:17]))

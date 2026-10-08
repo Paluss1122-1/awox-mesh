@@ -5,8 +5,7 @@ from Crypto.Cipher import AES
 
 from awox_mesh import protocol as ap
 
-# Deterministic placeholder credentials. Never use real mesh credentials in
-# committed tests: they would leak into the git history forever.
+# Placeholder credentials only. Never real ones: they stay in the git history.
 MESH_NAME = b"meshname"
 MESH_PASSWORD = b"meshpass"
 SESSION_RANDOM = bytes.fromhex("0001020304050607")
@@ -142,10 +141,13 @@ def test_flag_byte_set_for_high_address():
     assert packet[0] == 0x01
 
 
-@pytest.mark.parametrize("percent", [-10, 0, 50, 100, 150])
-def test_percentage_clamping(percent):
+@pytest.mark.parametrize("percent,expected", [
+    (-10, 2), (0, 2), (50, 128), (100, 254), (150, 254),
+])
+def test_brightness_percent_is_clamped_to_the_device_range(percent, expected):
     packet = ap.set_brightness(SESSION_KEY, DEST, percent)
-    assert len(packet) >= 17
+    block = ap.att_decrypt(SESSION_KEY, packet[1:17])
+    assert block[8] == expected
 
 
 def test_decode_status_reads_mesh_id_state_and_mac_tail():

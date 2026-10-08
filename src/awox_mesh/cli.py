@@ -1,9 +1,4 @@
-"""Command line client for awox-mesh.
-
-Most commands talk to the HTTP bridge. ``discover`` reads the lamp's real mesh
-address straight off the hardware and needs no bridge; ``--direct`` opens a BLE
-connection for the other commands too.
-"""
+"""Command line client for awox-mesh."""
 
 from __future__ import annotations
 
@@ -82,9 +77,9 @@ def _run_http(client: _Client, args) -> int:
         print(f"brightness {client.post('/brightness', {'percent': args.percent})['percent']}%")
         return 0
     if args.command == "color":
-        print("colour set")
         client.post("/color", {"red": args.red, "green": args.green, "blue": args.blue,
                                "brightness": args.brightness})
+        print("colour set")
         return 0
     if args.command == "white":
         body = {"temperature": args.temperature, "brightness": args.brightness}
@@ -121,7 +116,10 @@ async def _direct_discover() -> int:
     from .config import Config
     from .connection import discover
 
-    config = Config.from_env()
+    try:
+        config = Config.from_env()
+    except Exception as err:
+        return _fail(str(err))
     print(f"connecting to {config.mac} … the lamp advertises rarely, this can take a minute",
           file=sys.stderr)
     try:
@@ -156,20 +154,21 @@ async def _run_scan(timeout: float) -> int:
 
 async def _run_direct(args) -> int:
     from . import protocol as ap
-    from .config import MESH_ID_HELP, Config
+    from .config import MESH_ID_HELP, Config, ConfigError
     from .connection import create
 
     if args.command not in ("on", "off", "toggle", "state", "brightness", "lightshow"):
         return _fail(f"{args.command} needs the bridge -- drop --direct, "
                      "or use curl against the REST API")
 
-    config = Config.from_env()
-    needs_id = args.command in ("on", "off", "toggle", "brightness", "lightshow")
-    if needs_id and config.mesh_id is None:
-        return _fail(MESH_ID_HELP)
-
-    mesh = create(config)
+    mesh = None
     try:
+        config = Config.from_env()
+        needs_id = args.command in ("on", "off", "toggle", "brightness", "lightshow")
+        if needs_id and config.mesh_id is None:
+            return _fail(MESH_ID_HELP)
+        mesh = create(config)
+
         if args.command == "state":
             devices = await mesh.query_state()
             if not devices:
@@ -181,6 +180,10 @@ async def _run_direct(args) -> int:
             print(f"brightness {args.percent}%")
             return 0
         if args.command == "lightshow":
+            if args.action != "start":
+                return _fail("light show status and stop only work through the bridge; "
+                             "in --direct mode the show runs in the foreground, so "
+                             "just wait for it or press Ctrl+C")
             from .lightshow import run_lightshow
 
             async def send(builder):
@@ -199,10 +202,13 @@ async def _run_direct(args) -> int:
         suffix = f" (was {'on' if current else 'off'})" if args.command == "toggle" else ""
         print(f"lamp 0x{config.mesh_id:04X}: {'ON' if new_state else 'OFF'}{suffix}")
         return 0
+    except ConfigError as err:
+        return _fail(str(err))
     except ConnectionError as err:
         return _fail(str(err) or "no mesh connection")
     finally:
-        await mesh.stop()
+        if mesh is not None:
+            await mesh.stop()
 
 
 def _program_name() -> str:
@@ -213,9 +219,8 @@ def _program_name() -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    # The common options are defined on the top-level parser (so they work
-    # before the subcommand) and, with SUPPRESS defaults, on every subparser too
-    # (so they also work after it) without the subparser clobbering the value.
+    # Same options on the subparsers with SUPPRESS defaults, so they work in
+    # either position without the subparser clobbering the top-level value.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--url", default=argparse.SUPPRESS,
                         help="bridge base URL")
@@ -273,8 +278,6 @@ def main() -> int:
     if args.command == "scan":
         return asyncio.run(_run_scan(args.timeout))
 
-    # Load config.env automatically so the CLI works without exporting anything.
-    # Real environment variables still win (see load_env_file).
     from .config import load_default_env_files
 
     for path in load_default_env_files():
@@ -284,8 +287,6 @@ def main() -> int:
             and args.brightness is None:
         return _fail("white needs --temperature and/or --brightness")
 
-    # discover works with or without the bridge: use it when present, otherwise
-    # read the id straight off the lamp so first-run setup needs no server.
     if args.command == "discover":
         if args.direct:
             return asyncio.run(_direct_discover())

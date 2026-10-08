@@ -1,7 +1,7 @@
 # Hardware notes: AwoX/EGLO BLE mesh lamps
 
-Everything here is about the physical device, not the protocol. It is the part
-that turns "my code is correct" into "and yet nothing happens".
+These are the device quirks that make "my code is correct" turn into "and yet
+nothing happens".
 
 Tested on `EBF_RGB_Zm`, firmware `3.0.1_1593`.
 
@@ -64,8 +64,8 @@ Faster than roughly **0.3 s per command** and the lamp swallows commands; under
 sustained load it throws the link away (measured: dropped after 68 and after 97
 commands at an 80 ms interval). The light show enforces a 0.34 s minimum gap.
 
-A consequence worth knowing: a too-fast strobe sometimes simply stays on, because
-the off commands were dropped.
+Consequence: a too-fast strobe sometimes just stays on, because the off commands
+were dropped.
 
 ## Built-in sequences and schedules are the cheap path
 
@@ -110,8 +110,8 @@ fresh session after a `0x0e`.
 
 ## Two failure signatures on `0x0e`
 
-- `Pair-Antwort [1]: 0e…` — the alternating mode described above; a 5 s pause is
-  enough.
+- The log line `pair response [1]: 0e…` — the alternating mode described above; a
+  5 s pause is enough.
 - **No** reply at all on the pairing characteristic — the chip is stuck. Rest
   first, then power-cycle at the wall switch.
 

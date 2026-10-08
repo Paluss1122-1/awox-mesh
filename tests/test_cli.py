@@ -1,10 +1,11 @@
 """Parser-level tests for the CLI -- no hardware, no bridge."""
 
+import argparse
 import sys
 
 import pytest
 
-from awox_mesh.cli import build_parser
+from awox_mesh.cli import _run_http, build_parser
 
 
 def parse(argv):
@@ -69,3 +70,14 @@ def test_brightness_requires_a_percent():
 def test_unknown_command_is_rejected():
     with pytest.raises(SystemExit):
         parse(["nonsense"])
+
+
+def test_color_posts_before_reporting_success(capsys):
+    class FailingClient:
+        def post(self, *args, **kwargs):
+            raise RuntimeError("bridge down")
+
+    args = argparse.Namespace(command="color", red=1, green=2, blue=3, brightness=None)
+    with pytest.raises(RuntimeError):
+        _run_http(FailingClient(), args)
+    assert "colour set" not in capsys.readouterr().out

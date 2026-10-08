@@ -1,10 +1,7 @@
-"""Asynchronous BLE client for AwoX/EGLO mesh lamps (bleak backend).
+"""bleak backend: portable BLE control.
 
-This backend gives portable, cross-platform **control** over BLE. Reading the
-lamp state via notifications is not reliable here: the status characteristic has
-no CCCD, so BlueZ's ``StartNotify()`` fails with ``Unlikely Error`` and the chip
-then drops the link. Use the gatttool backend (``awox_mesh.gatt``) when you need
-``query_state``/``query``.
+Status via notifications is unreliable here (no CCCD); use the gatt backend for
+query_state/query. See docs/hardware.md.
 """
 
 from __future__ import annotations
@@ -150,12 +147,10 @@ class BleakConnection:
             bus.disconnect()
 
     async def _connect_once(self) -> None:
-        """Connect, preferring BlueZ Direct Connect.
+        """Connect, preferring BlueZ Direct Connect over scanning.
 
-        If bluetoothd already knows the device, call ``Connect()`` directly: the
-        controller then keeps its own connection window open and grabs the lamp
-        whenever it advertises -- the same trick the phone app uses to catch the
-        lamp despite its rare advertisements.
+        The same trick the phone app uses: the controller keeps a connection
+        window open and grabs the lamp whenever it advertises.
         """
         deadline = time.monotonic() + self.adv_timeout
         attempt = 0
@@ -258,6 +253,13 @@ class BleakConnection:
         self._client = client
         logger.info("Mesh session established (%s)", self.mesh_name.decode())
 
+        # Schedules and the dawn alarm only fire at the right time once the
+        # lamp's clock is set; the gatt backend does the same on connect.
+        try:
+            await self._send_raw(ap.set_time(self._session_key))
+        except Exception as err:
+            logger.debug("setting the clock failed: %s", err)
+
         self.notifications_active = False
         if self.notifications:
             try:
@@ -277,7 +279,6 @@ class BleakConnection:
         self._connected_evt.clear()
 
     async def run(self) -> None:
-        """Keep the connection open; run as a background task."""
         while not self._stop:
             if not self.is_connected:
                 try:
@@ -317,11 +318,7 @@ class BleakConnection:
         async with self._write_lock:
             await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=response)
 
-    def _target(self, dest: int | None) -> int:
-        return self.mesh_id if dest is None else dest
-
     async def send(self, build) -> None:
-        """Send a packet built by ``build(session_key, mesh_id)``."""
         if not self.is_connected:
             raise ConnectionError(self.last_error or "not connected to the mesh")
         await self._send_raw(build(self._session_key, self.mesh_id))

@@ -42,15 +42,18 @@ only 8 bytes and gets zero-padded to 16.
 
 ```python
 def combine_credentials(name: bytes, password: bytes) -> bytes:
-    return bytes(a ^ b for a, b in zip(name.ljust(16), password.ljust(16)))
+    return bytes(a ^ b for a, b in
+                 zip(name.ljust(16, b"\x00"), password.ljust(16, b"\x00")))
 
 def att_encrypt(key: bytes, value: bytes) -> bytes:
-    k = reversed(key.ljust(16, b"\x00"))
-    v = reversed(value.ljust(16, b"\x00"))
-    return reversed(AES.new(k, AES.MODE_ECB).encrypt(v))
+    k = bytes(reversed(key.ljust(16, b"\x00")))
+    v = bytes(reversed(value.ljust(16, b"\x00")))
+    return bytes(reversed(AES.new(k, AES.MODE_ECB).encrypt(v)))
 
-packet = b"\x0c" + session_random + att_encrypt(session_random, combine_credentials(name, password))[:8]
-session_key = att_encrypt(combine_credentials(name, password), session_random + response_random)
+packet = b"\x0c" + session_random + att_encrypt(
+    session_random, combine_credentials(name, password))[:8]
+session_key = att_encrypt(combine_credentials(name, password),
+                          session_random + response_random)
 ```
 
 This part is identical to
@@ -127,14 +130,14 @@ destination inside the block):
 
 The set-clock payload is seconds since 2000-01-01 UTC plus the UTC offset,
 both 32-bit little endian. Schedules do not fire at the right time until the
-clock has been set — the bridge does this on every connect.
+clock has been set; both backends set it on connect.
 
 A schedule body is 12 bytes:
 
 ```python
 body[0:2]  mesh address (little endian)
 body[2]    routine id (bits 0-6) | enabled (bit 7)
-body[3]    recurrence bits (0-1) | minute (bits 2-7)
+body[3]    constant 1 (bits 0-1) | minute (bits 2-7)
 body[4]    hour (5 bits)
 body[5]    weekday mask (bits 0-6) | recurrence (bit 7)
 body[6]    fade duration (6 bits)
@@ -144,7 +147,7 @@ body[9:11] mired (white) or hue + saturation (colour), little endian
 body[11]   multi-part counters: current (bits 0-3) | total (bits 4-7)
 ```
 
-Two traps worth writing down:
+Two traps:
 
 - For a **single** schedule the counters must be `current=1, total=0`. With
   `total=1` the lamp silently discards the write — no error, nothing happens.
@@ -178,12 +181,12 @@ on = bool(block[12] & 1)
 ```
 
 Status messages arrive unsolicited as soon as a valid command arrives — there is
-no notification subscription to set up. See `docs/hardware.md` for why you still
-cannot subscribe normally.
+no notification subscription to set up. See
+[`docs/hardware.md`](hardware.md) for why you still cannot subscribe normally.
 
 ## How the mesh address was found
 
-Worth recording, because the obvious approaches all fail:
+The obvious approaches all fail:
 
 - A sweep over mesh addresses 0–255 misses it outright.
 - The advertisement manufacturer data is byte-identical across every

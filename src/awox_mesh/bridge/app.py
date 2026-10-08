@@ -6,21 +6,40 @@ import argparse
 import asyncio
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 
 from .. import __version__
 from .. import protocol as ap
-from ..config import Config, load_default_env_files, load_env_file
+from ..config import Config, ConfigError, load_default_env_files, load_env_file
 from ..connection import create
 from ..lightshow import MIN_PAUSE, run_lightshow
 from .models import BrightnessBody, ColorBody, DawnBody, SequenceBody, WhiteBody
 
 logger = logging.getLogger("awox.bridge")
 
-Target = Query(None, ge=0, le=0xFFFF,
-               description="mesh id of the target; empty = the configured lamp")
+
+def _parse_target(raw: str) -> int:
+    try:
+        value = int(raw, 0)
+    except ValueError as err:
+        raise HTTPException(
+            status_code=422,
+            detail=f"target must be a mesh id such as 0x1234 (got {raw!r})") from err
+    if not 0 <= value <= 0xFFFF:
+        raise HTTPException(status_code=422, detail="target must be within 0..0xFFFF")
+    return value
+
+
+def target_param(target: str | None = Query(
+        None, description="mesh id of the target (decimal or 0xhex); "
+        "empty = the configured lamp")) -> int | None:
+    return _parse_target(target) if target is not None else None
+
+
+Target = Depends(target_param)
 
 
 def create_app(mesh, config) -> FastAPI:
@@ -40,9 +59,15 @@ def create_app(mesh, config) -> FastAPI:
     async def lifespan(_app: FastAPI):
         task = asyncio.create_task(mesh.run(), name="awox-mesh-connection")
         logger.info("bridge ready; mesh connection is being established in the background")
-        yield
-        task.cancel()
-        await mesh.stop()
+        try:
+            yield
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            await mesh.stop()
 
     app = FastAPI(
         title="AwoX/EGLO Mesh Bridge",
@@ -102,7 +127,7 @@ def create_app(mesh, config) -> FastAPI:
             "last_error": mesh.last_error,
         }
 
-    async def _all_devices() -> list[dict]:
+    async def _all_devices() -> tuple[list[dict], bool]:
         try:
             devices = await mesh.query_state()
         except ConnectionError as err:
@@ -110,19 +135,22 @@ def create_app(mesh, config) -> FastAPI:
         except Exception as err:
             raise HTTPException(status_code=503,
                                 detail=f"{type(err).__name__}: {err}") from err
-        return devices or [mesh.states[k] for k in sorted(mesh.states)]
+        fresh = bool(devices)
+        if not devices:
+            devices = [mesh.states[k] for k in sorted(mesh.states)]
+        return devices, fresh
 
     @app.get("/discover", summary="Read the real mesh id(s) from the mesh")
     async def discover():
         _require_link()
-        devices = await _all_devices()
-        return {"devices": devices, "fresh": bool(devices)}
+        devices, fresh = await _all_devices()
+        return {"devices": devices, "fresh": fresh}
 
     @app.get("/state", summary="Lamp state (freshly queried)")
     async def state():
         _require_link()
-        devices = await _all_devices()
-        return {"devices": devices, "fresh": bool(devices)}
+        devices, fresh = await _all_devices()
+        return {"devices": devices, "fresh": fresh}
 
     @app.get("/state/last", summary="Last observed state (passive, no BLE query)")
     async def state_last():
@@ -137,21 +165,21 @@ def create_app(mesh, config) -> FastAPI:
         }
 
     @app.post("/on", summary="Turn on")
-    async def turn_on(target: int = Target):
+    async def turn_on(target: int | None = Target):
         dest = _dest(target)
         await _fresh_state(dest)
         await _run(lambda key, d: ap.set_power(key, d, True), target)
         return {"ok": True, "target": dest, "state": True, "fresh": True}
 
     @app.post("/off", summary="Turn off")
-    async def turn_off(target: int = Target):
+    async def turn_off(target: int | None = Target):
         dest = _dest(target)
         await _fresh_state(dest)
         await _run(lambda key, d: ap.set_power(key, d, False), target)
         return {"ok": True, "target": dest, "state": False, "fresh": True}
 
     @app.post("/toggle", summary="Toggle -- reads the real state first")
-    async def toggle(target: int = Target):
+    async def toggle(target: int | None = Target):
         dest = _dest(target)
         current = (await _fresh_state(dest))["state"]
         new_state = not current
@@ -160,12 +188,12 @@ def create_app(mesh, config) -> FastAPI:
                 "fresh": True}
 
     @app.post("/brightness", summary="Brightness 0..100 %")
-    async def set_brightness(body: BrightnessBody, target: int = Target):
+    async def set_brightness(body: BrightnessBody, target: int | None = Target):
         await _run(lambda key, dest: ap.set_brightness(key, dest, body.percent), target)
         return {"ok": True, "target": _dest(target), "percent": body.percent}
 
     @app.post("/color", summary="Set RGB colour")
-    async def set_color(body: ColorBody, target: int = Target):
+    async def set_color(body: ColorBody, target: int | None = Target):
         await _run(lambda key, dest: ap.set_color_rgb(key, dest, body.red, body.green,
                                                       body.blue), target)
         if body.brightness is not None:
@@ -176,7 +204,7 @@ def create_app(mesh, config) -> FastAPI:
                 **body.model_dump(exclude_none=True)}
 
     @app.post("/white", summary="Set white temperature and/or brightness")
-    async def set_white(body: WhiteBody, target: int = Target):
+    async def set_white(body: WhiteBody, target: int | None = Target):
         if body.temperature is None and body.brightness is None:
             raise HTTPException(status_code=422,
                                 detail="temperature or brightness required")
@@ -192,18 +220,18 @@ def create_app(mesh, config) -> FastAPI:
                 **body.model_dump(exclude_none=True)}
 
     @app.post("/sequence", summary="Start a built-in colour sequence (runs in the lamp)")
-    async def set_sequence(body: SequenceBody, target: int = Target):
+    async def set_sequence(body: SequenceBody, target: int | None = Target):
         await _run(lambda key, dest: ap.set_sequence(key, dest, body.sequence,
                                                      body.duration_ms), target)
         return {"ok": True, "target": _dest(target), **body.model_dump()}
 
     @app.post("/sequence/stop", summary="Stop the running sequence")
-    async def stop_sequence(target: int = Target):
+    async def stop_sequence(target: int | None = Target):
         await _run(lambda key, dest: ap.stop_sequence(key, dest), target)
         return {"ok": True, "target": _dest(target)}
 
     @app.post("/candle", summary="Candle flicker")
-    async def candle(target: int = Target):
+    async def candle(target: int | None = Target):
         await _run(lambda key, dest: ap.set_candle_mode(key, dest, 1), target)
         return {"ok": True, "target": _dest(target)}
 
@@ -216,7 +244,7 @@ def create_app(mesh, config) -> FastAPI:
         return {"ok": True}
 
     @app.get("/dawn", summary="Read the stored dawn alarm")
-    async def get_dawn(target: int = Target):
+    async def get_dawn(target: int | None = Target):
         dest = _dest(target)
         try:
             blocks = await mesh.query(
@@ -229,7 +257,7 @@ def create_app(mesh, config) -> FastAPI:
         return ap.decode_schedule(blocks[-1])
 
     @app.post("/dawn", summary="Set the dawn alarm (runs autonomously in the lamp)")
-    async def set_dawn(body: DawnBody, target: int = Target):
+    async def set_dawn(body: DawnBody, target: int | None = Target):
         dest = _dest(target)
         await _run(lambda key, d: ap.set_dawn_simulator(
             key, d, body.hour, body.minute,
@@ -272,7 +300,7 @@ def create_app(mesh, config) -> FastAPI:
             _show.update(running=False, step=None, done=True, error=None)
 
     @app.post("/lightshow", summary="Start the light show (continues in the background)")
-    async def start_lightshow(target: int = Target):
+    async def start_lightshow(target: int | None = Target):
         nonlocal _show_task
         if _show["running"]:
             raise HTTPException(status_code=409, detail="light show already running")
@@ -299,7 +327,6 @@ def create_app(mesh, config) -> FastAPI:
 
 
 def build_app(config=None) -> FastAPI:
-    """Wire up the configured backend and wrap it in the HTTP app."""
     if config is None:
         config = Config.from_env()
     logging.basicConfig(
@@ -333,7 +360,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.log_level:
         os.environ["AWOX_LOG_LEVEL"] = args.log_level
 
-    config = Config.from_env()
+    try:
+        config = Config.from_env()
+    except ConfigError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
     host = args.host or config.host
     port = args.port or config.port
     logging.basicConfig(

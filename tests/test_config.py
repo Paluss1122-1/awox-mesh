@@ -28,7 +28,8 @@ BASE = {
 
 def _set(monkeypatch, **overrides):
     for name in ("AWOX_MAC", "AWOX_MESH_NAME", "AWOX_MESH_PASSWORD", "AWOX_MESH_ID",
-                 "AWOX_BACKEND", "AWOX_ADV_TIMEOUT"):
+                 "AWOX_BACKEND", "AWOX_ADV_TIMEOUT", "AWOX_PORT", "AWOX_HOST",
+                 "AWOX_API_KEY", "AWOX_CONNECT_TIMEOUT"):
         monkeypatch.delenv(name, raising=False)
     for name, value in {**BASE, **overrides}.items():
         monkeypatch.setenv(name, value)
@@ -66,6 +67,18 @@ def test_invalid_mesh_id_is_rejected(monkeypatch):
 def test_backend_defaults_to_auto(monkeypatch):
     _set(monkeypatch)
     assert Config.from_env().backend == "auto"
+
+
+def test_non_numeric_port_is_a_config_error(monkeypatch):
+    _set(monkeypatch, AWOX_PORT="not-a-port")
+    with pytest.raises(ConfigError):
+        Config.from_env()
+
+
+def test_non_numeric_timeout_is_a_config_error(monkeypatch):
+    _set(monkeypatch, AWOX_ADV_TIMEOUT="soon")
+    with pytest.raises(ConfigError):
+        Config.from_env()
 
 
 def test_parse_env_file_strips_quotes_and_comments(tmp_path):

@@ -1,18 +1,16 @@
 """awox-mesh -- control AwoX/EGLO BLE mesh lamps without the cloud.
 
-Quick start::
+    from awox_mesh import protocol
+    from awox_mesh.gatt import GattConnection
 
-    from awox_mesh import protocol, GattConnection
-
-    mesh = GattConnection(mac, mesh_name, mesh_password, mesh_id=0x1234)
+    mesh = GattConnection(mac, name, password, mesh_id=0x1234)
     await mesh.send(lambda key, mid: protocol.set_power(key, mid, True))
 
-Heavy submodules (BLE transports, HTTP bridge) are imported lazily by the
-factory in :mod:`awox_mesh.connection` so the pure ``protocol`` module can be
-used without installing any Bluetooth stack.
+Only ``protocol`` is imported here; the BLE transports and the bridge are
+imported lazily so the protocol layer works without a Bluetooth stack.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 from . import protocol
 

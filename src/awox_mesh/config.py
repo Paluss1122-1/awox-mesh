@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-class ConfigError(SystemExit):
-    """Raised when a mandatory setting is missing."""
+class ConfigError(Exception):
+    """A mandatory or malformed setting."""
 
 
 def _required(name: str) -> str:
@@ -19,6 +19,14 @@ def _required(name: str) -> str:
             "and start through it, or export the variable."
         )
     return value
+
+
+def _number(name: str, default: str, cast):
+    raw = os.environ.get(name, default)
+    try:
+        return cast(raw)
+    except ValueError as err:
+        raise ConfigError(f"{name} is not a valid number: {raw!r}") from err
 
 
 def parse_env_file(path: str | os.PathLike) -> dict[str, str]:
@@ -107,14 +115,14 @@ class Config:
             mesh_id=_parse_mesh_id(os.environ.get("AWOX_MESH_ID")),
             api_key=os.environ.get("AWOX_API_KEY") or None,
             host=os.environ.get("AWOX_HOST", "127.0.0.1"),
-            port=int(os.environ.get("AWOX_PORT", "8087")),
+            port=_number("AWOX_PORT", "8087", int),
             log_level=os.environ.get("AWOX_LOG_LEVEL", "INFO"),
-            adv_timeout=float(os.environ.get("AWOX_ADV_TIMEOUT", "600")),
+            adv_timeout=_number("AWOX_ADV_TIMEOUT", "600", float),
             notifications=os.environ.get("AWOX_NOTIFICATIONS", "").lower()
             in ("1", "true", "yes"),
             backend=os.environ.get("AWOX_BACKEND", "auto").lower(),
             adapter=os.environ.get("AWOX_ADAPTER") or None,
-            connect_timeout=float(os.environ.get("AWOX_CONNECT_TIMEOUT", "45")),
+            connect_timeout=_number("AWOX_CONNECT_TIMEOUT", "45", float),
             adapter_recall_cmd=os.environ.get("AWOX_ADAPTER_RECALL_CMD") or None,
         )
         if require_mesh_id and config.mesh_id is None:

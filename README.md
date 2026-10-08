@@ -17,9 +17,8 @@ The full derivation is in [`docs/protocol.md`](docs/protocol.md). The
 [hardware quirks](docs/hardware.md) that make these lamps awkward to drive are in
 [`docs/hardware.md`](docs/hardware.md).
 
-This repository is **self-contained**: it ships its own HTTP bridge
-(`awox-mesh-bridge`) and needs no pre-existing service, helper daemon or vendor
-cloud. Install it, point it at your lamp, done.
+This repository is self-contained: it ships its own HTTP bridge
+(`awox-mesh-bridge`) and does not need the vendor cloud or any other service.
 
 ## Quickstart
 
@@ -64,13 +63,14 @@ lamp** — no server, no phone, no Bluetooth link needed once it is set.
 ## Install
 
 ```bash
-git clone <your-fork-url> awox-mesh
+git clone https://github.com/Paluss1122-1/awox-mesh.git
 cd awox-mesh
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e .
 ```
 
-BLE on Linux also needs the usual BlueZ stack. On Debian/Ubuntu:
+Python 3.10 or newer is required. BLE on Linux also needs the usual BlueZ stack.
+On Debian/Ubuntu:
 
 ```bash
 sudo apt install bluez
@@ -103,9 +103,15 @@ $EDITOR config.env
 | `AWOX_API_KEY` | If set, requests must send `X-API-Key` |
 | `AWOX_HOST` / `AWOX_PORT` | Bind address of the bridge (default `127.0.0.1:8087`) |
 | `AWOX_ADV_TIMEOUT` | Seconds to wait for an advertisement (default `600`) |
+| `AWOX_CONNECT_TIMEOUT` | Seconds for one connect attempt (default `45`) |
+| `AWOX_LOG_LEVEL` | Log verbosity (default `INFO`) |
+| `AWOX_NOTIFICATIONS` | `bleak` only: subscribe to status notifications (default off) |
+| `AWOX_ADAPTER` | Force a Bluetooth adapter, e.g. `hci1` (default: auto-detect) |
+| `AWOX_ADAPTER_RECALL_CMD` | Optional command to re-enumerate the adapter after repeated connect failures |
 
 A real environment variable always wins over the file; set `AWOX_NO_ENV_FILE=1`
-to ignore the files entirely.
+to ignore the files entirely. The bridge also accepts `--host`, `--port`,
+`--env-file` and `--log-level` as flags, which override the file.
 
 ### Mesh credentials — pick the right set
 
@@ -209,9 +215,15 @@ curl -X POST localhost:8087/white      -H 'content-type: application/json' -d '{
 curl -X POST localhost:8087/sequence -H 'content-type: application/json' -d '{"sequence":3}'
 curl -X POST localhost:8087/sequence/stop
 curl -X POST localhost:8087/candle
+curl -X POST localhost:8087/time
+curl -X POST localhost:8087/lightshow          # and /lightshow/stop
 curl -s     localhost:8087/state
+curl -s     localhost:8087/state/last          # passive cache, no BLE traffic
 curl -s     localhost:8087/health
 ```
+
+`?target=0x....` (or decimal) works on every control endpoint. `POST /time` sets
+the lamp's clock by hand; normally both backends do that on connect.
 
 Interactive API docs are served at `/docs`.
 
@@ -231,13 +243,13 @@ alarm without deleting it. The bridge sets the lamp's clock on every connect.
 Bluetooth traffic is not needed — much gentler on the chip than streaming colours
 per second.
 
-### The honesty rule
+### State handling
 
-`/on`, `/off` and `/toggle` **read the real state first**. If no fresh status
-arrives they answer `503` and **send nothing** rather than reporting a state they
-did not verify. `/state` marks cached values with `"fresh": false`, and
-`/state/last` is a passive snapshot that costs no BLE traffic. A `503` means
-"unknown", not "failed to switch".
+`/on`, `/off` and `/toggle` read the real state first. If no fresh status
+arrives they answer `503` and send nothing, rather than report a state they did
+not verify. `/state` marks cached values with `"fresh": false`, and `/state/last`
+is a passive snapshot that costs no BLE traffic. A `503` means "unknown", not
+"failed to switch".
 
 ## CLI
 
@@ -322,15 +334,59 @@ A ready-to-edit unit ships in [`contrib/awox-mesh.service`](contrib/awox-mesh.se
 ```bash
 mkdir -p ~/.config/systemd/user
 cp contrib/awox-mesh.service ~/.config/systemd/user/
-$EDITOR ~/.config/systemd/user/awox-mesh.service   # set WorkingDirectory to your clone
+$EDITOR ~/.config/systemd/user/awox-mesh.service   # set WorkingDirectory AND ExecStart to your clone
 systemctl --user enable --now awox-mesh
 systemctl --user status awox-mesh
 loginctl enable-linger "$USER"                      # so it survives logout
 ```
 
-The unit starts `awox-mesh-bridge --env-file <clone>/config.env`, so it does not
-depend on the shell environment. Keep `config.env` at mode `600` — it holds
-credentials.
+The unit ships with paths for a clone at `~/awox-mesh`. If yours lives elsewhere,
+change **both** `WorkingDirectory` and `ExecStart`. It runs
+`awox-mesh-bridge --env-file <clone>/config.env`, so it does not depend on the
+shell environment. Keep `config.env` at mode `600` — it holds credentials.
+
+## Home Assistant
+
+The bridge is a plain REST service; you do not need a custom integration. As long
+as HA can reach the host (see `AWOX_HOST` above), `rest_command` is enough:
+
+```yaml
+rest_command:
+  awox_on:
+    url: "http://127.0.0.1:8087/on"
+  awox_off:
+    url: "http://127.0.0.1:8087/off"
+  awox_scene_blue:
+    url: "http://127.0.0.1:8087/color"
+    method: POST
+    content_type: "application/json"
+    payload: '{"red":0,"green":0,"blue":255}'
+```
+
+With `AWOX_API_KEY` set, add `headers: {X-API-Key: "<secret>"}` to each command.
+A proper HA integration on top of `/state` is the natural next step and is not in
+this repository yet.
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| `bridge unreachable` | the bridge is not running: start `awox-mesh-bridge`, or use `awox --direct …` |
+| `AWOX_MESH_ID is not set` | expected before first `discover`; set it afterwards |
+| `connection failed` | vendor app or another instance holds the lamp; power-cycle the wall switch |
+| `503` on `/on`, `/off`, `/toggle` | no fresh status arrived, so nothing was sent. Retry; check the link |
+| `/state` returns `"fresh": false` | the lamp is not answering; the value is the last cache |
+| pairing reply `0x0e` | wrong credential set or the lamp's alternating pairing mode |
+| `discovery needs the gatt backend` | `gatttool` is missing; install `bluez` or set `AWOX_BACKEND=gatt` |
+| lamp answers nothing at all | chip stuck; power-cycle the wall switch (off 10 s) |
+
+## Security
+
+- The bridge binds to `127.0.0.1` and is unprotected until you set `AWOX_API_KEY`
+  and, only if needed, `AWOX_HOST=0.0.0.0`. Do not expose it to the internet.
+- `config.env` holds the mesh credentials; keep it at mode `600` and out of git.
+- BLE traffic is the vendor's own plaintext-ish scheme; treat the mesh password as
+  a shared secret for anyone in radio range.
 
 ## Tests
 
@@ -342,8 +398,8 @@ python -m pytest tests -q
 The tests need no hardware. The protocol tests check the crypto against an
 independent AES-ECB reference, the CRC against a bitwise reference, and the
 command and schedule layout field by field. The bridge tests run against a stub
-connection and pin the honesty rule: no state is reported without a fresh
-readback, and no command is sent when the state is unknown.
+connection and check that no state is reported without a fresh readback and that
+no command is sent when the state is unknown.
 
 ## Status and caveats
 

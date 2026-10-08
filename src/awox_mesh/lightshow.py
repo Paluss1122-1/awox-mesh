@@ -1,9 +1,4 @@
-"""The light show sequence -- shared by the HTTP bridge and the CLI.
-
-Runs the lamp once through every known function. The caller only provides the
-``send`` callable and an optional progress callback; the whole sequence lives
-here so server and CLI play the same show.
-"""
+"""The light show sequence, shared by the bridge and the CLI."""
 
 from __future__ import annotations
 

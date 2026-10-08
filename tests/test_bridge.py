@@ -104,6 +104,27 @@ def test_bridge_without_mesh_id_accepts_explicit_target():
         assert response.json()["target"] == DEST
 
 
+def test_target_accepts_hex(client):
+    response = client.post(f"/off?target=0x{DEST:04X}")
+    assert response.status_code == 200
+    assert response.json()["target"] == DEST
+
+
+def test_target_rejects_garbage(client):
+    assert client.post("/off?target=zzz").status_code == 422
+    assert client.post("/off?target=0x10000").status_code == 422
+
+
+def test_state_marks_cached_values_as_not_fresh():
+    """The honesty rule: a stale cache must never be reported as fresh."""
+    mesh = StubMesh(devices=[])  # the live query answers nothing
+    mesh.states = {DEST: {"mesh_id": DEST, "state": True}}  # but a cache exists
+    with TestClient(create_app(mesh, make_config())) as c:
+        data = c.get("/state").json()
+        assert data["fresh"] is False
+        assert data["devices"][0]["mesh_id"] == DEST
+
+
 def test_state_is_fresh_when_the_lamp_answered(client):
     data = client.get("/state").json()
     assert data["fresh"] is True
