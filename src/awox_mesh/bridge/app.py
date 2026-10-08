@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 
 from .. import __version__
 from .. import protocol as ap
-from ..config import Config
+from ..config import Config, load_default_env_files, load_env_file
 from ..connection import create
 from ..lightshow import MIN_PAUSE, run_lightshow
 from .models import BrightnessBody, ColorBody, DawnBody, SequenceBody, WhiteBody
@@ -307,8 +309,41 @@ def build_app(config=None) -> FastAPI:
     return create_app(create(config), config)
 
 
-def main() -> None:
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="awox-mesh-bridge",
+        description="Run the AwoX/EGLO mesh HTTP bridge (FastAPI + uvicorn).")
+    parser.add_argument("--env-file",
+                        help="config file with NAME=value lines (default: ./config.env)")
+    parser.add_argument("--host", help="bind address (default AWOX_HOST, 127.0.0.1)")
+    parser.add_argument("--port", type=int, help="port (default AWOX_PORT, 8087)")
+    parser.add_argument("--log-level", help="override AWOX_LOG_LEVEL")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
+    args = build_arg_parser().parse_args(argv)
+    if args.env_file:
+        load_env_file(args.env_file)
+    else:
+        for path in load_default_env_files():
+            logger.info("config: %s", path)
+    if args.log_level:
+        os.environ["AWOX_LOG_LEVEL"] = args.log_level
+
     config = Config.from_env()
-    uvicorn.run(build_app(config), host=config.host, port=config.port)
+    host = args.host or config.host
+    port = args.port or config.port
+    logging.basicConfig(
+        level=config.log_level,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    )
+    logger.info("bridge on http://%s:%d (interactive docs at /docs)", host, port)
+    uvicorn.run(build_app(config), host=host, port=port)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

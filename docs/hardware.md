@@ -124,3 +124,10 @@ The BLE name, the product code in the status block and the manufacturer data
 identify the lamp, but **not** the mesh address — that has to come from a status
 block, i.e. from a working connection. Expect to set `AWOX_MESH_ID` once per
 lamp.
+
+Careful when several lamps share a mesh: they all advertise the **same** BLE name
+and mesh credentials, so the name does not tell them apart and a MAC remembered
+from an earlier session may belong to a lamp that is currently switched off. Use
+`awox scan` to see which lamps are actually advertising right now (MAC + name +
+RSSI), then `awox discover` to see which one answers, and pick your target by MAC.
+A lamp that has no power simply never appears — that is not a failure.

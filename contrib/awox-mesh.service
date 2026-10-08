@@ -1,0 +1,24 @@
+# User service for the awox-mesh HTTP bridge.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp contrib/awox-mesh.service ~/.config/systemd/user/
+#   # edit WorkingDirectory below to point at your clone:
+#   systemctl --user enable --now awox-mesh
+#   loginctl enable-linger "$USER"
+#
+# The bridge loads the config file given with --env-file, so it does not depend
+# on any shell environment. Keep that file at mode 600 -- it holds credentials.
+
+[Unit]
+Description=AwoX/EGLO Mesh Bridge
+After=bluetooth.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/awox-mesh
+ExecStart=%h/awox-mesh/.venv/bin/awox-mesh-bridge --env-file %h/awox-mesh/config.env
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

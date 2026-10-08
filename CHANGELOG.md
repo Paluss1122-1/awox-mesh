@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-10-08
+
+Second round of fixes from watching a clean install be guided entirely through a
+chat assistant.
+
+### Added
+
+- `awox scan`: lists AwoX lamps currently advertising (MAC + name + RSSI) to fill
+  `AWOX_MAC`. Needed because several lamps of one mesh share the same BLE name, so
+  the name cannot identify a lamp and a remembered MAC can be stale.
+- Config files are loaded automatically: `./config.env` and
+  `~/.config/awox-mesh/config.env`. No more `export` dance; a real environment
+  variable still wins, and `AWOX_NO_ENV_FILE=1` disables it.
+- `awox-mesh-bridge` now has a CLI: `--help`, `--host`, `--port`, `--env-file`
+  (and `--log-level`). Before, `--help` crashed with a config error.
+- `contrib/awox-mesh.service`, a ready-to-edit systemd user unit.
+
+### Changed
+
+- The bridge binds to `127.0.0.1` by default instead of `0.0.0.0`. Exposing it to
+  the LAN is now explicit (`AWOX_HOST=0.0.0.0`) and documented as needing
+  `AWOX_API_KEY`.
+- `awox state` and friends now name the exact fallback when the bridge is not
+  running: `… or run: awox --direct state`.
+
+### Documentation
+
+- A Quickstart with the full happy path at the top.
+- A "Two ways to talk to the lamp" section: bridge vs `--direct`, and that
+  `discover` is the one command that falls back automatically.
+- Explicitly states the repository is self-contained and needs no other AwoX
+  service; notes the port-8087 clash with the unrelated legacy `awox_endpoint`.
+- Multi-lamp section: same mesh name, pick by MAC.
+- "Make the CLI available everywhere" (the venv trap).
+
 ## [1.1.0] - 2026-10-08
 
 Fixes from a real first-run install on a clean user account.

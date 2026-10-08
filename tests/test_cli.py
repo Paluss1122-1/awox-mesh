@@ -51,6 +51,12 @@ def test_discover_defaults_and_direct():
     assert parse(["discover", "--direct"]).direct is True
 
 
+def test_scan_has_a_timeout():
+    assert parse(["scan"]).command == "scan"
+    assert parse(["scan"]).timeout == 30.0
+    assert parse(["scan", "--timeout", "120"]).timeout == 120.0
+
+
 def test_api_key_is_parsed_after_subcommand():
     assert parse(["health", "--api-key", "abc"]).api_key == "abc"
 

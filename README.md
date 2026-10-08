@@ -17,6 +17,35 @@ The full derivation is in [`docs/protocol.md`](docs/protocol.md). The
 [hardware quirks](docs/hardware.md) that make these lamps awkward to drive are in
 [`docs/hardware.md`](docs/hardware.md).
 
+This repository is **self-contained**: it ships its own HTTP bridge
+(`awox-mesh-bridge`) and needs no pre-existing service, helper daemon or vendor
+cloud. Install it, point it at your lamp, done.
+
+## Quickstart
+
+```bash
+git clone https://github.com/Paluss1122-1/awox-mesh.git
+cd awox-mesh
+python3 -m venv .venv && . .venv/bin/activate && pip install -e .
+
+cp config.env.example config.env && chmod 600 config.env
+$EDITOR config.env              # fill AWOX_MAC, AWOX_MESH_NAME, AWOX_MESH_PASSWORD
+
+awox scan --timeout 120        # list AwoX lamps (MAC + name); put the MAC in config.env
+awox discover                  # read the real mesh id straight from the lamp
+$EDITOR config.env             # set AWOX_MESH_ID=0x....
+
+awox-mesh-bridge               # terminal 1: start the HTTP bridge (docs at /docs)
+awox state                     # terminal 2: talk to the bridge
+```
+
+The CLI and the bridge load `./config.env` automatically, so you never have to
+`export` anything. Env vars still win if you prefer them.
+
+> `awox` needs the venv. In a **new terminal** it is gone again
+> (`awox: command not found`) until you `source .venv/bin/activate` — or link it
+> once into `~/.local/bin` (see [Make the CLI available everywhere](#make-the-cli-available-everywhere)).
+
 ## What you get
 
 - `awox_mesh.protocol` — pure packet arithmetic and cryptography, no Bluetooth
@@ -55,13 +84,14 @@ to use BLE afterwards: the shipped D-Bus policy lets any local user talk to
 
 ## Configuration
 
-Copy the example and fill in what you know — the file is never committed:
+Copy the example and fill in what you know — the file is never committed. It is
+loaded automatically from the working directory (and from
+`~/.config/awox-mesh/config.env`), so `export` is not needed:
 
 ```bash
 cp config.env.example config.env
 chmod 600 config.env
 $EDITOR config.env
-set -a && source config.env && set +a
 ```
 
 | Variable | Meaning |
@@ -71,8 +101,11 @@ set -a && source config.env && set +a
 | `AWOX_MESH_ID` | Real mesh address of the lamp, e.g. `0x1234`. Can stay empty for `discover` |
 | `AWOX_BACKEND` | `auto` (default), `gatt` or `bleak` |
 | `AWOX_API_KEY` | If set, requests must send `X-API-Key` |
-| `AWOX_HOST` / `AWOX_PORT` | Bind address of the bridge (default `0.0.0.0:8087`) |
+| `AWOX_HOST` / `AWOX_PORT` | Bind address of the bridge (default `127.0.0.1:8087`) |
 | `AWOX_ADV_TIMEOUT` | Seconds to wait for an advertisement (default `600`) |
+
+A real environment variable always wins over the file; set `AWOX_NO_ENV_FILE=1`
+to ignore the files entirely.
 
 ### Mesh credentials — pick the right set
 
@@ -125,11 +158,45 @@ works without a mesh id; only control needs it.
 > running bridge or systemd service (`systemctl --user stop awox-mesh`). Two
 > clients just reconnect in a loop and can wedge the chip.
 
+### Several lamps share one mesh
+
+All lamps of one mesh use the same `mesh_name` **and** the same BLE name — so the
+name does **not** identify a single lamp, and a MAC from an earlier session may
+actually belong to a lamp that is currently switched off. `awox scan` lists the
+lamps that are actually advertising right now (MAC + name + RSSI); `awox discover`
+then reports which of them answers and its mesh id. Pick one lamp per
+`AWOX_MESH_ID`; to address another lamp, pass `?target=0x....` to the bridge.
+
+## Two ways to talk to the lamp
+
+| | talks to | needs | features |
+|---|---|---|---|
+| `awox …` (default) | the running bridge on `127.0.0.1:8087` | `awox-mesh-bridge` running | everything, incl. multi-lamp `?target=` |
+| `awox --direct …` | the lamp over BLE | nothing else | single lamp, requires `AWOX_MESH_ID` |
+
+`awox discover` is special: it uses the bridge if one is running and otherwise
+falls back to direct BLE automatically, so first-run setup needs no server. The
+other commands stay in their mode — if you see `bridge unreachable`, either start
+`awox-mesh-bridge` or add `--direct`. The error message tells you both.
+
 ## HTTP bridge
 
+The bridge is this repository's own FastAPI service. It does **not** need any
+other AwoX service. Interactive OpenAPI docs are at `/docs`.
+
 ```bash
-awox-mesh-bridge            # reads config.env from the environment
+awox-mesh-bridge                        # uses ./config.env, binds 127.0.0.1:8087
+awox-mesh-bridge --help                 # --host / --port / --env-file
+awox-mesh-bridge --host 0.0.0.0 --port 8087   # expose to the LAN (set AWOX_API_KEY!)
 ```
+
+By default it binds to **`127.0.0.1`** and is only reachable locally. If another
+host (e.g. Home Assistant) must reach it, set `AWOX_HOST=0.0.0.0` **and**
+`AWOX_API_KEY=<secret>`.
+
+> **Port 8087 is also used by the unrelated legacy `awox_endpoint` project.** If
+> that old service is still installed, only one of the two can own the port —
+> stop the other one, or pick a different `AWOX_PORT`.
 
 ```bash
 curl -s     localhost:8087/discover
@@ -175,6 +242,7 @@ did not verify. `/state` marks cached values with `"fresh": false`, and
 ## CLI
 
 ```bash
+awox scan --timeout 120 # list AwoX lamps (MAC + name) for config.env
 awox discover           # first run: read the lamp's mesh id (no bridge needed)
 awox state
 awox on && awox off
@@ -189,6 +257,19 @@ awox --direct state     # talk to the lamp directly, without the bridge
 
 Both `awox` and `awox-mesh` are installed as the same command. The common
 options (`--url`, `--api-key`, `--direct`) work before or after the subcommand.
+
+### Make the CLI available everywhere
+
+Inside the venv the commands exist; in a new shell they do not. Either activate
+the venv again, or link the scripts once into your PATH:
+
+```bash
+ln -s "$PWD/.venv/bin/awox" "$HOME/.local/bin/awox"
+ln -s "$PWD/.venv/bin/awox-mesh-bridge" "$HOME/.local/bin/awox-mesh-bridge"
+```
+
+(A `pipx install -e .` or `uv tool install --editable .` gives you the same
+result without the manual links.)
 
 ## Python API
 
@@ -236,29 +317,20 @@ within a session. Details, opcodes and the schedule frames are in
 
 ## Run as a service
 
-```ini
-# ~/.config/systemd/user/awox-mesh.service
-[Unit]
-Description=AwoX/EGLO Mesh Bridge
-After=bluetooth.target
-
-[Service]
-# The unit runs the interpreter explicitly: on an NTFS checkout the exec bit on
-# config.env cannot survive, so do not rely on it.
-ExecStart=/bin/bash -c 'set -a; . %h/Projects/awox-mesh/config.env; set +a; exec %h/Projects/awox-mesh/.venv/bin/awox-mesh-bridge'
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=default.target
-```
+A ready-to-edit unit ships in [`contrib/awox-mesh.service`](contrib/awox-mesh.service):
 
 ```bash
+mkdir -p ~/.config/systemd/user
+cp contrib/awox-mesh.service ~/.config/systemd/user/
+$EDITOR ~/.config/systemd/user/awox-mesh.service   # set WorkingDirectory to your clone
 systemctl --user enable --now awox-mesh
-loginctl enable-linger "$USER"      # so it survives logout
+systemctl --user status awox-mesh
+loginctl enable-linger "$USER"                      # so it survives logout
 ```
 
-Keep `config.env` at mode `600` — it holds credentials.
+The unit starts `awox-mesh-bridge --env-file <clone>/config.env`, so it does not
+depend on the shell environment. Keep `config.env` at mode `600` — it holds
+credentials.
 
 ## Tests
 

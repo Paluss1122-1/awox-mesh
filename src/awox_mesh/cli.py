@@ -136,6 +136,24 @@ async def _direct_discover() -> int:
     return 0
 
 
+async def _run_scan(timeout: float) -> int:
+    from .scan import AWOX_OUI, scan
+
+    print(f"scanning {timeout:.0f}s for AwoX lamps (OUI {AWOX_OUI}) …", file=sys.stderr)
+    try:
+        lamps = await scan(timeout)
+    except Exception as err:
+        return _fail(f"{type(err).__name__}: {err}")
+    if not lamps:
+        return _fail("no AwoX lamp advertised -- these lamps advertise only every "
+                     "~25 s, so try a longer --timeout, make sure the lamp has power, "
+                     "and close the vendor app")
+    for lamp in lamps:
+        print(f"{lamp['address']}  {(lamp['name'] or '(no name)'):14s}  RSSI {lamp['rssi']} dBm")
+    print(f"\nFound {len(lamps)} lamp(s). Put the MAC you want into AWOX_MAC.")
+    return 0
+
+
 async def _run_direct(args) -> int:
     from . import protocol as ap
     from .config import MESH_ID_HELP, Config
@@ -217,6 +235,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("discover", parents=[common],
                    help="read the lamp's real mesh id (first run, no bridge needed)")
 
+    sc = sub.add_parser("scan", parents=[common],
+                        help="list AwoX lamps in range with their MAC (for AWOX_MAC)")
+    sc.add_argument("--timeout", type=float, default=30.0,
+                    help="seconds to scan (default 30; lamps advertise rarely)")
+
     for name, help_text in (("on", "turn on"), ("off", "turn off"),
                             ("toggle", "toggle"), ("state", "show state")):
         sub.add_parser(name, parents=[common], help=help_text)
@@ -246,6 +269,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+
+    if args.command == "scan":
+        return asyncio.run(_run_scan(args.timeout))
+
+    # Load config.env automatically so the CLI works without exporting anything.
+    # Real environment variables still win (see load_env_file).
+    from .config import load_default_env_files
+
+    for path in load_default_env_files():
+        print(f"config: {path}", file=sys.stderr)
+
     if args.command == "white" and args.temperature is None \
             and args.brightness is None:
         return _fail("white needs --temperature and/or --brightness")
@@ -281,8 +315,10 @@ def main() -> int:
             pass
         return _fail(f"bridge error ({err.code}): {detail}")
     except urllib.error.URLError as err:
-        return _fail(f"bridge unreachable at {args.url}: {err.reason} "
-                     "(start it or use --direct)")
+        hint = "start the bridge (awox-mesh-bridge)"
+        if args.command in ("on", "off", "toggle", "brightness", "state"):
+            hint += f", or run: awox --direct {args.command}"
+        return _fail(f"bridge unreachable at {args.url}: {err.reason} ({hint})")
     except TimeoutError:
         return _fail("bridge did not answer in time")
 

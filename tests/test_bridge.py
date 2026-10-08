@@ -9,7 +9,7 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from awox_mesh.bridge.app import create_app
+from awox_mesh.bridge.app import build_arg_parser, create_app
 from awox_mesh.config import Config
 
 DEST = 0x1234
@@ -182,3 +182,18 @@ def test_dawn_read_reports_504_when_the_lamp_stays_silent(client):
 def test_sequence_body_validation(client):
     assert client.post("/sequence", json={"sequence": 9}).status_code == 422
     assert client.post("/sequence", json={"sequence": 3}).status_code == 200
+
+
+def test_bridge_arg_parser_defaults():
+    args = build_arg_parser().parse_args([])
+    assert args.host is None
+    assert args.port is None
+    assert args.env_file is None
+
+
+def test_bridge_arg_parser_flags():
+    args = build_arg_parser().parse_args(
+        ["--host", "0.0.0.0", "--port", "9000", "--env-file", "/tmp/config.env"])
+    assert args.host == "0.0.0.0"
+    assert args.port == 9000
+    assert args.env_file == "/tmp/config.env"
